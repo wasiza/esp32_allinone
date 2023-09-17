@@ -1,0 +1,225 @@
+#include <Arduino.h>
+#include <Wire.h>
+#include <LiquidCrystal_I2C.h>
+#include <WiFi.h>
+#include <HTTPClient.h>
+#include <ArduinoJson.h>
+#include "time.h"
+#include <DHT.h>
+
+LiquidCrystal_I2C lcd(0x27, 16, 2);
+const char* ssid = "oumta";
+const char* password = "03269696";
+
+const char* bitcoinAPI = "http://api.coindesk.com/v1/bpi/currentprice/BTC.json";
+const char* ethereumAPI = "https://api.coingecko.com/api/v3/simple/price?ids=ethereum&vs_currencies=usd";
+
+const char* ntpServer = "pool.ntp.org";
+const long gmtOffset_sec = 3 * 3600;
+const int daylightOffset_sec = 0; 
+
+struct tm timeinfo;
+
+#define DHTPIN 14
+#define DHTTYPE DHT22
+DHT dht(DHTPIN, DHTTYPE);
+
+int loopCounter = 0;
+int currentMessageIndex = 0;
+const char* healthMessages[] = {
+  "Hydrate yourself!",
+  "Time for a stretch!",
+  "Check your posture!",
+  "Take a deep breath!",
+  "Time to blink eyes!",
+  "Time for a smile!",
+  "Had a fruit today?",
+  "Try one-leg stand!",
+  "Snack time: Grab nuts!",
+  "Get some sunlight!"
+};
+
+void setup() {
+  Serial.begin(115200);
+  lcd.init();
+  lcd.backlight();
+  dht.begin();
+  connectToWifi();
+  configureTime();
+}
+
+void loop() {
+  loopCounter++;
+
+  displayDateTime();
+  delay(10000);  
+  displayCryptoPrices();
+  delay(10000);  
+  displayDHT22Data();
+  delay(10000);  
+  displayWifiSignalQuality();
+  delay(10000);  
+  
+  if (loopCounter == 10) {
+    displayHealthMessage();
+    loopCounter = 0;  
+  }
+}
+
+void connectToWifi() {
+  lcd.clear();
+  lcd.setCursor(0, 0);
+  lcd.print("InfoHub: On Air!");
+  lcd.setCursor(2, 1);
+  lcd.print("CONNECTING...");
+
+  WiFi.begin(ssid, password);
+  while (WiFi.status() != WL_CONNECTED) {
+    delay(1000);
+    Serial.println("Connecting to WiFi...");
+  }
+  Serial.println("Connected to WiFi");
+}
+
+void configureTime() {
+  configTime(gmtOffset_sec, daylightOffset_sec, ntpServer);
+  while (!getLocalTime(&timeinfo)) {
+    Serial.println("Failed to obtain time, retrying...");
+    delay(1000);
+  }
+  Serial.println("Time set correctly");
+}
+
+float getPriceFromAPI(const char* apiUrl) {
+  HTTPClient http;
+  http.begin(apiUrl);
+  int httpResponseCode = http.GET();
+  
+  String response = http.getString();
+  http.end();
+
+  if (httpResponseCode == 200) {
+    DynamicJsonDocument doc(1024);
+    DeserializationError error = deserializeJson(doc, response);
+
+    if (!error) {
+      if (strcmp(apiUrl, ethereumAPI) == 0) {
+        return doc["ethereum"]["usd"];
+      } else if (strcmp(apiUrl, bitcoinAPI) == 0) {
+        return doc["bpi"]["USD"]["rate_float"];
+      }
+    } else {
+      Serial.println("Error parsing JSON");
+      return 0.0;
+    }
+  } else {
+    Serial.print("HTTP error code: ");
+    Serial.println(httpResponseCode);
+    return 0.0;
+  }
+}
+
+void displayCryptoPrices() {
+    lcd.clear();
+    lcd.setCursor(0, 0);
+    lcd.print("BTC: ");
+    float btcPrice = getPriceFromAPI(bitcoinAPI);
+    lcd.setCursor(5, 0);
+    lcd.print(btcPrice, 2);
+
+    lcd.setCursor(0, 1);
+    lcd.print("ETH: ");
+    float ethPrice = getPriceFromAPI(ethereumAPI);
+    lcd.setCursor(5, 1);
+    lcd.print(ethPrice, 2);
+    delay(10000); // Display BTC and ETH for 10 seconds
+
+    lcd.clear();
+    lcd.setCursor(0, 0);
+    lcd.print("XRP: ");
+    float xrpPrice = getPriceFromAPI(xrpAPI);
+    lcd.setCursor(5, 0);
+    lcd.print(xrpPrice, 2);
+
+    lcd.setCursor(0, 1);
+    lcd.print("ADA: ");
+    float adaPrice = getPriceFromAPI(adaAPI);
+    lcd.setCursor(5, 1);
+    lcd.print(adaPrice, 2);
+    delay(10000); // Display XRP and ADA for 10 seconds
+}
+
+void displayDateTime() {
+  char buffer[20];
+
+  if (!getLocalTime(&timeinfo)) {
+    Serial.println("Failed to obtain time");
+    return;
+  }
+
+  lcd.clear();
+  strftime(buffer, sizeof(buffer), "Date: %d-%m-%Y", &timeinfo);
+  lcd.setCursor(0, 1);
+  lcd.print(buffer);
+
+  strftime(buffer, sizeof(buffer), "Time: %H:%M:%S", &timeinfo);
+  lcd.setCursor(0, 0);
+  lcd.print(buffer);
+}
+
+void displayDHT22Data() {
+  lcd.clear();
+  float humidity = dht.readHumidity();
+  float tempC = dht.readTemperature();
+
+  if (isnan(humidity) || isnan(tempC)) {
+    lcd.print("DHT22 Error!");
+    return;
+  }
+  
+  lcd.setCursor(0, 0);
+  lcd.print("Temp:     ");
+  lcd.print(tempC, 1);
+  lcd.print("C");
+  
+  lcd.setCursor(0, 1);
+  lcd.print("Humidity: ");
+  lcd.print(humidity, 1);
+  lcd.print("%");
+}
+
+void displayWifiSignalQuality() {
+  lcd.clear();
+  int quality = WiFi.RSSI();
+
+  if (quality <= -100) {
+    quality = 0;
+  } else if (quality >= -50) {
+    quality = 100;
+  } else {
+    quality = 2 * (quality + 100);
+  }
+
+  lcd.setCursor(0, 0);
+  lcd.print("Net Signal: ");
+  lcd.print(quality);
+  lcd.print("%");
+
+  int blockCount = (quality * 16) / 100; // Adjusted calculation for 16 blocks
+  lcd.setCursor(0, 1);
+  for (int i = 0; i < blockCount; i++) {
+    lcd.write(byte(255));  // the block character
+  }
+}
+
+void displayHealthMessage() {
+  lcd.clear();
+  lcd.setCursor(0, 0);
+  lcd.print(healthMessages[currentMessageIndex]);
+  currentMessageIndex++;
+ if (currentMessageIndex >= (sizeof(healthMessages) / sizeof(healthMessages[0]))) {
+    currentMessageIndex = 0;  // Reset index if we've displayed all messages
+  }
+  delay(5000); // Optional delay to let the health message be displayed for a certain time.
+}
+
